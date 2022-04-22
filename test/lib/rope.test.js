@@ -1,6 +1,7 @@
 import {
   insert, deleteRange,
-  createRopeFromMap, rebalance
+  createRopeFromMap, rebalance,
+  splitMap, splitAt
 } from '../../lib/rope'
 
 const createLeaf = (text) => createRopeFromMap({
@@ -38,6 +39,19 @@ describe("rope basics", () => {
   })
   test("branch constructor", () => expect(branch.toString()).toEqual('test'));
   test("branch size", () => expect(branch.size()).toEqual(4));
+  test('test test', () => {
+    const { left: te, right: st } = splitAt(branch, 2);
+    expect(''+te).toBe('te');
+    expect(''+st).toBe('st');
+
+    const { left: t, right: est } = splitAt(branch, 1);
+    expect(''+t).toBe('t');
+    expect(''+est).toBe('est');
+
+    const { left: tes, right: _t } = splitAt(branch, 3);
+    expect(''+tes).toBe('tes');
+    expect(''+_t).toBe('t');
+  });
 });
 
 describe("insertion", () => {

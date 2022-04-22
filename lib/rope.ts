@@ -1,10 +1,26 @@
 /*
-  Note: this file is in typescript, but you do not need to use typings if you don't want.
+Notes on solution:
 
-  The type annotations are just there in case they are helpful.
+- I'm not 100% confident in the balance operation. Though it may be
+  at least probabalistically correct. (Not going to attempt to fix that
+  spelling...).
+
+- Ideal solution would also find a way to compute `size` dynamically.
+
+- All the operations I implemented. return copies.
+
+- I wrote most of the implementation code on top of the MapRepresentation,
+  but kept the class-based representations as a "view" into the data.
+  In production code, if we took this route, we'd want to modify the
+  classes so they don't allocate any more memory - but just act as a
+  view layer on top of the underlying data.
+
+- There's lots of repeated code where "right" is substituted for "left"
+  and vice versa. More general way of expressing "direction" would be nice.
 */
 
 type MapBranch = {
+  balanced?: boolean,
   left?: MapRepresentation,
   right?: MapRepresentation,
   size: number,
@@ -75,7 +91,7 @@ export class RopeBranch implements IRope {
   height(): number {
     return 1 + Math.max(this.leftHeight(), this.rightHeight())
   }
-  
+ 
   // Please note that this is defined differently from "weight" in the Wikipedia article.
   // You may wish to rewrite this method or create a different one.
   size() {
@@ -84,7 +100,7 @@ export class RopeBranch implements IRope {
 
   /*
     Whether the rope is balanced, i.e. whether any subtrees have branches
-    which differ by more than one in height. 
+    which differ by more than one in height.
   */
   isBalanced(): boolean {
     const leftBalanced = this.left ? this.left.isBalanced() : true
@@ -105,7 +121,7 @@ export class RopeBranch implements IRope {
   }
 
   // Helper method which converts the rope into an associative array
-  // 
+  //
   // Only used for debugging, this has no functional purpose
   toMap(): MapBranch {
     const mapVersion: MapBranch = {
@@ -123,7 +139,6 @@ export class RopeBranch implements IRope {
   }
 }
 
-
 export function createRopeFromMap(map: MapRepresentation): IRope {
   if (map.kind == 'leaf') {
     return new RopeLeaf(map.text)
@@ -135,20 +150,164 @@ export function createRopeFromMap(map: MapRepresentation): IRope {
   return new RopeBranch(left, right);
 }
 
-// This is an internal API. You can implement it however you want. 
-// (E.g. you can choose to mutate the input rope or not)
-function splitAt(rope: IRope, position: number): { left: IRope, right: IRope } {
-  // TODO
+
+
+const empty = { kind: 'leaf', text: '' };
+// Compute "size" for MapRepresentation.
+const mSize = (n?: MapRepresentation) => {
+  if (! n) return 0;
+  if (n.kind == 'leaf') return n.text.length;
+  return n.size;
 }
 
-export function deleteRange(rope: IRope, start: number, end: number): IRope {
+function splitMap(
+  rope: MapRepresentation|undefined,
+  position: number
+): {left: MapRepresentation, right: MapRepresentation} {
+  // Empty nodes.
+  if (! rope) return { left: empty, right: empty };
+  // Leaf nodes.
+  if (rope.kind == 'leaf') {
+    return {
+      left: {kind: 'leaf', text: rope.text.substring(0, position) },
+      right: {kind: 'leaf', text: rope.text.substring(position) },
+    }
+  }
+  // Out of bounds.
+  if (position < 0) return { left: empty, right: rope };
+  if (position >= rope.size) return { left: rope, right: empty };
+
+  const lSize = mSize(rope.left);
+  const rSize = mSize(rope.right);
+  if (position > lSize) {
+    const splat = splitMap(rope.right, position - lSize);
+    return {
+      right: splat.right,
+      left: {
+        ...rope,
+        size: rope.size - position,
+        right: splat.left
+      }
+    }
+  }
+  const splat = splitMap(rope.left, position);
+  return {
+    left: splat.left,
+    right: {
+      ...rope,
+      size: rope.size - position,
+      left: splat.right
+    }
+  }
+}
+
+export function insertMap(rope: MapRepresentation, text: string, location: number): MapRepresentation {
   // TODO
+  const split = splitMap(rope, location);
+  return {
+    kind: 'branch',
+    size: text.length + mSize(rope),
+    left: {
+       left: split.left,
+       right: {
+         kind: 'leaf',
+         text,
+       }
+    },
+    right: split.right,
+  }
+}
+
+export function deleteMap(rope: MapRepresentation, start: number, end: number): MapRepresentation {
+  const startSplit = splitMap(rope, start);
+  const endSplit = splitMap(rope, end);
+  if (end === undefined) {
+    console.warn(new Error().stack);
+  }
+  return {
+    kind: 'branch',
+    size: rope.size - (end-start),
+    left: startSplit.left,
+    right: endSplit.right,
+  };
+}
+
+function rotateRight(rope: MapRepresentation): MapRepresentation {
+  if (! rope.left) return rope;
+  return {
+    ...rope.left,
+    size: rope.size,
+    right: {
+       ...rope,
+       size: rope.size - mSize(rope.left) + mSize(rope?.left?.right),
+       left: rope?.left?.right
+    }
+  }
+}
+
+function rotateLeft(rope: MapRepresentation): MapRepresentation {
+  if (! rope.right) return rope;
+  return {
+    ...rope.right,
+    size: rope.size,
+    left: {
+       ...rope,
+       size: rope.size - mSize(rope.right) + mSize(rope?.right?.left),
+       right: rope?.right?.left
+    }
+  };
+}
+
+const imbalance = (r: MapRepresentation) => Math.abs(mSize(r.left) - mSize(r.right));
+
+function balanceMap(rope: MapRepresentation, rec=false): MapRepresentation {
+  if (! rope || rope.kind == 'leaf' || rope.balanced) return rope;
+  const left = balanceMap(rope.left);
+  const right = balanceMap(rope.right);
+  rope = { ... rope, left, right};
+  while (true) {
+    let next;
+    if (mSize(rope.left) > mSize(rope.right)) {
+      next = rotateRight(rope);
+    } else {
+      next = rotateLeft(rope);
+    }
+    if (imbalance(rope) <= imbalance(next)) {
+      break;
+    }
+    rope = next;
+  }
+  rope.balanced = true; // Safe because this is a clone.
+  return rope;
+}
+
+// This is an internal API. You can implement it however you want.
+// (E.g. you can choose to mutate the input rope or not)
+//
+// Visisble for testing.
+export function splitAt(rope: IRope, position: number): { left: IRope, right: IRope } {
+  const { left, right } = splitMap(rope.toMap(), position);
+  return {
+    left: createRopeFromMap(left),
+    right: createRopeFromMap(right)
+  };
+}
+
+
+///////////
+// External APIs.
+///////////
+export function deleteRange(rope: IRope, start: number, end: number): IRope {
+  return createRopeFromMap(
+    deleteMap(rope.toMap(), start, end)
+  );
 }
 
 export function insert(rope: IRope, text: string, location: number): IRope {
-  // TODO
+  return createRopeFromMap(insertMap(rope.toMap(), text, location));
 }
 
 export function rebalance(rope: IRope): IRope {
-  // TODO
+  const map = balanceMap(rope.toMap());
+  return createRopeFromMap(map);
 }
